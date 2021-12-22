@@ -1,0 +1,14 @@
+certifi==2020.12.5
+chardet==4.0.0
+crypto==1.4.1
+docopt==0.6.2
+idna==2.10
+Naked==0.1.31
+pipreqs==0.4.11
+pwinput==1.0.2
+PyYAML==5.4.1
+requests==2.25.1
+shellescape==3.8.1
+termcolor==1.1.0
+urllib3==1.26.3
+yarg==0.1.9
