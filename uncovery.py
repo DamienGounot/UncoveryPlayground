@@ -138,27 +138,64 @@ def getOneAssetGraph(entitiesAndID,token,assetsAndEntitiesID):
     return result
 
 def getDifferentsPorts(jsonFile):
-    with open(jsonFile,'r') as f_in:
-        data = json.load(f_in)
-        result = {}
-        for entity in data:
-            portArray = []
-            for ip in data[entity]:
-                for tcp in data[entity][ip]['TCP']:
-                    portArray.append(int(tcp))
-                for udp in data[entity][ip]['UDP']:
-                    portArray.append(int(udp))
-            raw = np.array(portArray)
-            uniquePorts = np.unique(raw)
-            sortedAndUniquePorts = sorted(uniquePorts)
-            result[entity] = sortedAndUniquePorts
+    result = {}
+    cprint('Retrieve every used ports...','yellow')
+    try:
+        with open(jsonFile,'r') as f_in:
+            data = json.load(f_in)
+            for entity in data:
+                print(colored('For entity ','yellow') + colored(entity, 'magenta') + colored(' :','yellow'))
+                portArray = []
+                for ip in data[entity]:
+                    for tcp in data[entity][ip]['TCP']:
+                        portArray.append(int(tcp))
+                    for udp in data[entity][ip]['UDP']:
+                        portArray.append(int(udp))
+                raw = np.array(portArray)
+                uniquePorts = np.unique(raw)
+                sortedAndUniquePorts = sorted(uniquePorts)
+                result[entity] = sortedAndUniquePorts
+                print(colored(sortedAndUniquePorts,'cyan'))
+        print(colored('Success retrieving ports','green'))
+    except:
+        print(colored('Error retrieving ports','red'))
     return result
 
-def createExcelSheets(entitiesAndID,portList,jsonData): #WIP
+def cleanSubdirectory(directory):
+    print(colored("Removing files in \" ",'yellow') + colored(directory,'magenta') + colored(" \" directory...","yellow"))
+    if os.path.exists(directory):
+        for files in os.listdir(directory):
+            os.remove(os.path.join(directory, files))
+    else:
+        try:
+            os.mkdir(directory)
+            print(colored('Cleaning success','green'))
+        except Exception:
+            print(colored("Error : could not create " + directory + " subdirectory !",'red'))
+
+def createExcelSheets(entitiesAndID,portList,jsonFile): #WIP
+    cleanSubdirectory('output')
     wb1 = Workbook()
-    for entity,id in entitiesAndID.items():
-        ws = wb1.create_sheet(entity)
-    wb1.save('output.xlsx')
+    try:
+        print(colored('Creating Excel output...','yellow'))
+        for entity,id in entitiesAndID.items():
+            actualPortIndex = actualIpIndex = 2
+            ws = wb1.create_sheet(entity)
+            with open(jsonFile,'r') as f_in:
+                data = json.load(f_in)
+                for ip in data[entity]:
+                    ws.cell(row = actualIpIndex, column = 1).value = str(ip)
+                    for port in portList[entity]:
+                        ws.cell(row = 1, column = actualPortIndex).value = str(port)
+                        if (str(port) in data[entity][ip]['TCP']) or (str(port) in data[entity][ip]['UDP']):
+                            ws.cell(row = actualIpIndex, column = actualPortIndex).value = 'X'
+                        actualPortIndex = actualPortIndex + 1
+                    actualPortIndex = 2 # reset Index port
+                    actualIpIndex = actualIpIndex + 1        
+        wb1.save(os.path.join('output','output.xlsx'))
+        print(colored('Success when creating Excel file','green'))
+    except:
+        print(colored('Error when creating Excel file','red'))
 
 if __name__ == '__main__':
     colorama.init()
@@ -187,4 +224,4 @@ if __name__ == '__main__':
     print(jsonData)
     sys.stdout = orig_stdout
     portListForEachEntity = getDifferentsPorts('data.json')
-    createExcelSheets(entitiesAndID,portListForEachEntity,jsonData)
+    createExcelSheets(entitiesAndID,portListForEachEntity,'data.json')
