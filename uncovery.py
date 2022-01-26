@@ -9,6 +9,9 @@ import json
 import pwinput
 import numpy as np
 from  openpyxl import Workbook
+from openpyxl.styles import Alignment
+from openpyxl.utils import get_column_letter
+import traceback
 
 #https://api.uncovery.io/v1/documentation
 
@@ -45,23 +48,6 @@ def getAllEntities(token,url,payload):
     else:
         cprint(response['message'],"red")
         sys.exit(0)
-
-def getAllCartographyOfAnEntity(entitiesAndID,token): #useless for now, work in progress
-    for entity, id in entitiesAndID.items():
-        print(colored("Getting all Cartography of entity: ","yellow") + colored(entity, 'magenta') + colored(' ...','yellow'))
-        url = "https://api.uncovery.io/v1/entities/"+ str(id) +"/cartographies"
-        payload = "pageSize=20&page=1&sortBy=createdAt&orderBy=desc"
-        r,response = createAndSendAuthRequest(token,url,payload)
-        if r.ok:
-            cprint(response['request']['message'],"green")
-            while True:
-                if str(response['pageInfo']['hasNextPage']) == 'False':
-                    pass
-                    break
-                else:
-                    pass
-        else:
-            cprint(response['message'],"red")
 
 def getAllAssetsOfAnEntity(entitiesAndID,token,assetType):
     AssetsDict = {}
@@ -124,10 +110,13 @@ def getOneAssetGraph(entitiesAndID,token,assetsAndEntitiesID):
                         cprint(response['request']['message'],"green")
 
                         for item in response['data']['nodes']:
+                            tmpDict = {}
+                            tmpDict['port'] = item['value']
+                            tmpDict['detail'] = "FIXME"
                             if item['type'] == 'porttcp':
-                                portTcpArray.append(item['value'])
+                                portTcpArray.append(tmpDict)
                             if item['type'] == 'portudp':
-                                portUdpArray.append(item['value'])
+                                portUdpArray.append(tmpDict)
                         portsDict['TCP'] = portTcpArray
                         portsDict['UDP'] = portUdpArray
                         entityDict[ipValue] = portsDict
@@ -145,17 +134,26 @@ def getDifferentsPorts(jsonFile):
             data = json.load(f_in)
             for entity in data:
                 print(colored('For entity ','yellow') + colored(entity, 'magenta') + colored(' :','yellow'))
-                portArray = []
+                TCPportArray = []
+                UDPportArray = []
+                portsDict = {}   
                 for ip in data[entity]:
-                    for tcp in data[entity][ip]['TCP']:
-                        portArray.append(int(tcp))
-                    for udp in data[entity][ip]['UDP']:
-                        portArray.append(int(udp))
-                raw = np.array(portArray)
-                uniquePorts = np.unique(raw)
-                sortedAndUniquePorts = sorted(uniquePorts)
-                result[entity] = sortedAndUniquePorts
-                print(colored(sortedAndUniquePorts,'cyan'))
+        
+                    for tcp in data[entity][ip]["TCP"]:
+                        TCPportArray.append(int(tcp['port']))
+                    for udp in data[entity][ip]["UDP"]:
+                        UDPportArray.append(int(udp['port']))
+                TCPraw = np.array(TCPportArray)
+                UDPraw = np.array(UDPportArray)
+                TCPuniquePorts = np.unique(TCPraw)
+                UDPuniquePorts = np.unique(UDPraw)
+                TCPsortedAndUniquePorts = sorted(TCPuniquePorts)
+                UDPsortedAndUniquePorts = sorted(UDPuniquePorts)
+                portsDict["TCP"] = TCPsortedAndUniquePorts
+                portsDict["UDP"] = UDPsortedAndUniquePorts
+                result[entity] = portsDict
+                print(colored('TCP: ','magenta') + colored(TCPsortedAndUniquePorts,'cyan'))
+                print(colored('UDP: ','magenta') + colored(UDPsortedAndUniquePorts,'cyan'))
         print(colored('Success retrieving ports','green'))
     except:
         print(colored('Error retrieving ports','red'))
@@ -185,17 +183,66 @@ def createExcelSheets(entitiesAndID,portList,jsonFile): #WIP
                 data = json.load(f_in)
                 for ip in data[entity]:
                     ws.cell(row = actualIpIndex, column = 1).value = str(ip)
-                    for port in portList[entity]:
-                        ws.cell(row = 1, column = actualPortIndex).value = str(port)
-                        if (str(port) in data[entity][ip]['TCP']) or (str(port) in data[entity][ip]['UDP']):
-                            ws.cell(row = actualIpIndex, column = actualPortIndex).value = 'X'
-                        actualPortIndex = actualPortIndex + 1
+                    for protocol in portList[entity]:
+                        for port in portList[entity][protocol]:
+                            ws.cell(row = 1, column = actualPortIndex).value = protocol.lower()+'/'+str(port)
+                            ws.cell(row = 1, column = actualPortIndex).alignment = Alignment(horizontal='center', textRotation = 90)
+                            ws.column_dimensions[get_column_letter(actualPortIndex)].width = 3
+                            #if (str(port) in data[entity][ip][protocol]): # A FIX, condition de detection
+                            if any(x['port'] == str(port) for x in data[entity][ip][protocol]):    
+                                ws.cell(row = actualIpIndex, column = actualPortIndex).value = 'X'
+                                ws.cell(row = actualIpIndex, column = actualPortIndex).alignment = Alignment(horizontal='center')
+                            actualPortIndex = actualPortIndex + 1
                     actualPortIndex = 2 # reset Index port
-                    actualIpIndex = actualIpIndex + 1        
+                    actualIpIndex = actualIpIndex + 1
+            ws.row_dimensions[1].height = 50
+            ws.freeze_panes = "A2"
+            ws.column_dimensions['A'].width = 15
         wb1.save(os.path.join('output','output.xlsx'))
         print(colored('Success when creating Excel file','green'))
     except:
         print(colored('Error when creating Excel file','red'))
+        traceback.print_exc()
+
+def diff(obj1, obj2):
+    change = []
+    # vérifier si des ips ont ete ajoutees ou supprimes dans le scope
+    del_ip = [ x for x in obj1 if not x in obj2 ]
+    add_ip = [ x for x in obj2 if not x in obj1 ]
+    for i in del_ip:
+        change.append({'type':'removeip', 'ip':i})
+    for i in add_ip:
+        change.append({'type':'addip', 'ip':i})
+    #  verifier les differences sur les ports
+    interlist = obj1.keys() & obj2.keys()
+    for protocol in ['TCP', 'UDP']:
+        for i in interlist :
+            ports1 = [ x.get('port') for x in obj1.get(i).get(protocol)]
+            ports2 = [ x.get('port') for x in obj2.get(i).get(protocol)]
+            add_ports = [ x for x in ports2 if not x in ports1]
+            del_ports = [ x for x in ports1 if not x in ports2]
+
+            for p in add_ports:
+                change.append({'type':'addport', 'ip':i, 'port':p, 'protocol':protocol})
+          
+            for p in del_ports:
+                change.append({'type':'delport', 'ip':i, 'port':p, 'protocol':protocol})
+
+    
+    return change
+
+def getDiffBetweenEntity(entitiesAndID,previous,actual):
+    previousData = actualData = None
+    with open(previous,'r') as previousFile:
+            previousData = json.load(previousFile)
+    with open(actual,'r') as actualFile:
+            actualData = json.load(actualFile)
+    print(colored("======= ","yellow")+colored("Changes","red")+colored(" =======","yellow"))
+    for entity, idEntity in entitiesAndID.items():
+        print(colored("======= ","yellow")+colored(entity,"magenta")+colored(" =======","yellow"))
+        print(diff(previousData[entity],actualData[entity]))
+        #Edit Excel ici
+        
 
 if __name__ == '__main__':
     colorama.init()
@@ -214,14 +261,23 @@ if __name__ == '__main__':
     
     accessToken = signin(email,password)
     entitiesAndID = getAllEntities(accessToken,url = 'https://api.uncovery.io/v1/entities', payload = {'pageSize':'100','sortBy':'name','orderBy':'asc'})
-    #getAllCartographyOfAnEntity(entitiesAndID,accessToken) #useless for now
     assetsAndEntitiesID = getAllAssetsOfAnEntity(entitiesAndID,accessToken,"ipv4")
     openedPortsByIPForEachEntity = getOneAssetGraph(entitiesAndID,accessToken,assetsAndEntitiesID)
-
     jsonData = json.dumps(openedPortsByIPForEachEntity, sort_keys=True)
     orig_stdout = sys.stdout
     sys.stdout = open('data.json', 'w+')
-    print(jsonData)
+    print(jsonData) # Save every open tcp/udp ports
     sys.stdout = orig_stdout
-    portListForEachEntity = getDifferentsPorts('data.json')
+    portListForEachEntity = getDifferentsPorts('data.json') # list of tcp/udp used ports
+    #print(colored(portListForEachEntity,"cyan"))
     createExcelSheets(entitiesAndID,portListForEachEntity,'data.json')
+        
+    try:
+        print(colored('Compute difference since last run...','yellow'))
+        getDiffBetweenEntity(entitiesAndID,"previous.json","data.json")
+        os.remove('previous.json')
+    except:
+        print(colored('Error when computing !','red'))
+    os.rename('data.json', 'previous.json')
+    print(colored('Finish !','green'))    
+  

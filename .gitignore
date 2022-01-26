@@ -4,3 +4,7 @@ output.json
 data.json
 
 data.json_backup
+
+output/output.xlsx
+
+previous.json
