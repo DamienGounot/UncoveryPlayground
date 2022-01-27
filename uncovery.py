@@ -11,9 +11,16 @@ import numpy as np
 from  openpyxl import Workbook
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
+from openpyxl import load_workbook
 import traceback
+from datetime import date
+import pickle
+from DAmailPGP import Mail
+
 
 #https://api.uncovery.io/v1/documentation
+
+DEBUG = False
 
 def signin(email, password):
     cprint("Signin...","yellow")
@@ -80,15 +87,6 @@ def getAllAssetsOfAnEntity(entitiesAndID,token,assetType):
                 cprint(response['message'],"red")
                 break
         AssetsDict[id] = ipsDict
-
-    # #For display only
-    # for entity, id in entitiesAndID.items():
-    #     print(colored("Display result for : ","yellow") + colored(entity, 'green') + colored(' is : ','yellow'))
-    #     for idEntity, ipsDict in AssetsDict.items():
-    #         if id == idEntity:
-    #             for ipId, ipValue in ipsDict.items():
-    #                 print(ipValue)
-    
     return AssetsDict
 
 def getOneAssetGraph(entitiesAndID,token,assetsAndEntitiesID):
@@ -157,6 +155,7 @@ def getDifferentsPorts(jsonFile):
         print(colored('Success retrieving ports','green'))
     except:
         print(colored('Error retrieving ports','red'))
+        print(traceback.format_exc() if DEBUG else '')
     return result
 
 def cleanSubdirectory(directory):
@@ -171,7 +170,7 @@ def cleanSubdirectory(directory):
         except Exception:
             print(colored("Error : could not create " + directory + " subdirectory !",'red'))
 
-def createExcelSheets(entitiesAndID,portList,jsonFile): #WIP
+def createExcelSheets(entitiesAndID,portList,jsonFile):
     cleanSubdirectory('output')
     wb1 = Workbook()
     try:
@@ -202,47 +201,137 @@ def createExcelSheets(entitiesAndID,portList,jsonFile): #WIP
         print(colored('Success when creating Excel file','green'))
     except:
         print(colored('Error when creating Excel file','red'))
-        traceback.print_exc()
+        print(traceback.format_exc() if DEBUG else '')
 
 def diff(obj1, obj2):
     change = []
+    today = date.today().strftime("%Y/%m/%d")
+
+    try:
+        with open('changes-history.picle', 'rb') as f:
+            changes_history = pickle.load(f)
+    except:
+        # fichier non existant, sera cree a la fin du diff
+            changes_history = [{'type':'None', 'ip':'None', 'port':'None', 'protocol':'None', 'timestamp':today}]
+            print(traceback.format_exc() if DEBUG else '')
+    
     # vérifier si des ips ont ete ajoutees ou supprimes dans le scope
+
     del_ip = [ x for x in obj1 if not x in obj2 ]
     add_ip = [ x for x in obj2 if not x in obj1 ]
+
     for i in del_ip:
-        change.append({'type':'removeip', 'ip':i})
+        change.append({'type':'removeip', 'ip':i, 'timestamp':today})
+
     for i in add_ip:
-        change.append({'type':'addip', 'ip':i})
+        change.append({'type':'addip', 'ip':i, 'timestamp':today})
+
+
+
     #  verifier les differences sur les ports
     interlist = obj1.keys() & obj2.keys()
+
     for protocol in ['TCP', 'UDP']:
         for i in interlist :
             ports1 = [ x.get('port') for x in obj1.get(i).get(protocol)]
             ports2 = [ x.get('port') for x in obj2.get(i).get(protocol)]
+
             add_ports = [ x for x in ports2 if not x in ports1]
             del_ports = [ x for x in ports1 if not x in ports2]
 
             for p in add_ports:
-                change.append({'type':'addport', 'ip':i, 'port':p, 'protocol':protocol})
-          
-            for p in del_ports:
-                change.append({'type':'delport', 'ip':i, 'port':p, 'protocol':protocol})
+                change.append({'type':'addport', 'ip':i, 'port':p, 'protocol':protocol, 'timestamp':today})
 
-    
-    return change
+            for p in del_ports:
+                change.append({'type':'removeport', 'ip':i, 'port':p, 'protocol':protocol, 'timestamp':today})
+
+    all_changes = [*change, *changes_history]
+    with open('changes-history.picle', 'wb') as f:
+        pickle.dump(all_changes,f)
+
+    if(len(all_changes) > len(changes_history)): # si nouveau changement ajouté 
+        msg = genMessage(all_changes,len(changes_history))
+        print(msg)
+        m = Mail("Uncovery Daily Update - changements detectes !",msg,os.path.join('output','output.xlsx'))
+        m.sendmail()
+    else:
+        msg = "Pas de nouveaux changements détectés :)"
+        print(msg)
+        m = Mail("Uncovery Daily Update - RAS ! ",msg,os.path.join('output','output.xlsx'))
+        m.sendmail()
+    return all_changes
 
 def getDiffBetweenEntity(entitiesAndID,previous,actual):
+
     previousData = actualData = None
     with open(previous,'r') as previousFile:
             previousData = json.load(previousFile)
     with open(actual,'r') as actualFile:
             actualData = json.load(actualFile)
-    print(colored("======= ","yellow")+colored("Changes","red")+colored(" =======","yellow"))
-    for entity, idEntity in entitiesAndID.items():
-        print(colored("======= ","yellow")+colored(entity,"magenta")+colored(" =======","yellow"))
-        print(diff(previousData[entity],actualData[entity]))
-        #Edit Excel ici
+    
+    obj1 = {}
+    obj2 = {}
+
+    for i in previousData.keys():
+        obj1.update(previousData[i])
+
+    for i in actualData.keys():
+        obj2.update(actualData[i])
+
+    changes = diff(obj1,obj2)
         
+    for x in changes:
+        if 'port' in x['type']:
+            sendUpdateToExcel(x['timestamp'],x['type'],x['ip'],x['protocol'],x['port'])
+        else:
+            sendUpdateToExcel(x['timestamp'],x['type'],x['ip'])
+
+        # osef, juste pour prompt joli
+        if 'remove' in x['type']:
+            if 'ip' in x['type']:
+                print(colored("Delete: ","red")+colored("ip: ","yellow")+colored(x['ip'],"cyan"))
+            else:
+                print(colored("Delete: ","red")+colored("port: ","yellow")+colored(x['protocol']+"/","cyan")+colored(x['port'],"cyan")+colored(" ip: ","yellow")+colored(x['ip'],"cyan"))
+        else:
+            if 'ip' in x['type']:
+                print(colored("Add: ","green")+colored("ip: ","yellow")+colored(x['ip'],"cyan"))
+            else:
+                print(colored("Add: ","green")+colored("port: ","yellow")+colored(x['protocol']+"/","cyan")+colored(x['port'],"cyan")+colored(" ip: ","yellow")+colored(x['ip'],"cyan"))
+    
+def sendUpdateToExcel(*args):
+    wb = load_workbook(os.path.join('output','output.xlsx'))
+    wb.worksheets[0].title = 'Historique des changements'
+    ws = wb.worksheets[0]
+    ws.insert_rows(1)
+    
+    actualCol = 1
+    for x in args:
+        ws.cell(row = 1, column = actualCol).value = x
+        ws.cell(row = 1, column = actualCol).alignment = Alignment(horizontal='center')
+        actualCol = actualCol +1
+    ws.column_dimensions['A'].width = 10
+    ws.column_dimensions['B'].width = 12
+    ws.column_dimensions['C'].width = 15
+    ws.column_dimensions['D'].width = 5
+    ws.column_dimensions['E'].width = 7
+    wb.save(os.path.join('output','output.xlsx'))                   
+
+
+def genMessage(all_changes,indice):
+    msg = "Les changements sont: \n"
+    for x in all_changes[:-indice]:
+        # juste pour mail joli
+        if 'remove' in x['type']:
+            if 'ip' in x['type']:
+                msg += "Delete ip: "+x['ip']+"\n"
+            else:
+                msg += "Delete port: "+x['protocol']+"/"+x['port']+" from ip: "+x['ip']+"\n"
+        else:
+            if 'ip' in x['type']:
+                msg += "Add ip: "+x['ip']+"\n"
+            else:
+                msg += "Add port: "+x['protocol']+"/"+x['port']+" from ip: "+x['ip']+"\n"
+    return msg
 
 if __name__ == '__main__':
     colorama.init()
@@ -269,15 +358,14 @@ if __name__ == '__main__':
     print(jsonData) # Save every open tcp/udp ports
     sys.stdout = orig_stdout
     portListForEachEntity = getDifferentsPorts('data.json') # list of tcp/udp used ports
-    #print(colored(portListForEachEntity,"cyan"))
     createExcelSheets(entitiesAndID,portListForEachEntity,'data.json')
         
     try:
-        print(colored('Compute difference since last run...','yellow'))
+        print(colored('Compute differences history...','yellow'))
         getDiffBetweenEntity(entitiesAndID,"previous.json","data.json")
         os.remove('previous.json')
     except:
-        print(colored('Error when computing !','red'))
+        print(colored('Warning: no previous run !','red'))
+        print(traceback.format_exc() if DEBUG else '')
     os.rename('data.json', 'previous.json')
-    print(colored('Finish !','green'))    
-  
+    print(colored('Finish !','green'))
