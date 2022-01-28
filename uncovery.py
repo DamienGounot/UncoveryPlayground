@@ -15,12 +15,14 @@ from openpyxl import load_workbook
 import traceback
 from datetime import date
 import pickle
-from DAmailPGP import Mail
+from mailPGP import Mail
 
 
 #https://api.uncovery.io/v1/documentation
 
 DEBUG = False
+OBJ = ""
+MSG = ""
 
 def signin(email, password):
     cprint("Signin...","yellow")
@@ -249,16 +251,15 @@ def diff(obj1, obj2):
     with open('changes-history.picle', 'wb') as f:
         pickle.dump(all_changes,f)
 
-    if(len(all_changes) > len(changes_history)): # si nouveau changement ajouté 
-        msg = genMessage(all_changes,len(changes_history))
-        print(msg)
-        m = Mail("Uncovery Daily Update - changements detectes !",msg,os.path.join('output','output.xlsx'))
-        m.sendmail()
+
+    global OBJ
+    global MSG
+    if(len(all_changes) > len(changes_history)): # si nouveau changement ajouté
+        MSG = genMessage(all_changes,len(changes_history))
+        OBJ = "Uncovery Daily Update - Changements detectes !"
     else:
-        msg = "Pas de nouveaux changements détectés :)"
-        print(msg)
-        m = Mail("Uncovery Daily Update - RAS ! ",msg,os.path.join('output','output.xlsx'))
-        m.sendmail()
+        MSG = "Pas de nouveaux changements détectés :)"
+        OBJ = "Uncovery Daily Update - Rien a signaler !"
     return all_changes
 
 def getDiffBetweenEntity(entitiesAndID,previous,actual):
@@ -363,6 +364,17 @@ if __name__ == '__main__':
     try:
         print(colored('Compute differences history...','yellow'))
         getDiffBetweenEntity(entitiesAndID,"previous.json","data.json")
+        try:
+            print(colored("Sending e-mail ...","yellow"))
+            print(colored("=================================","magenta"))
+            print(colored("OBJ: ","magenta")+colored(OBJ,"yellow"))
+            print(colored("CONTENT: ","magenta")+colored(MSG,"yellow"))
+            print(colored("=================================","magenta"))
+            m = Mail(OBJ,MSG,os.path.join('output','output.xlsx'))
+            m.sendmail()
+            print(colored("Mail has been send !","green"))
+        except:
+            print(colored("Error when sending email","red"))
         os.remove('previous.json')
     except:
         print(colored('Warning: no previous run !','red'))
